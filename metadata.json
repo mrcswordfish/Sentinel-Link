@@ -1,0 +1,9 @@
+{
+  "name": "Sentinel Link",
+  "description": "A remote device management dashboard that simulates controlling a lost or stolen device. Features live feed analysis using Gemini AI, location tracking, and remote security commands.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
