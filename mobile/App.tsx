@@ -18,7 +18,7 @@ import Geolocation from 'react-native-geolocation-service';
 // --- CONNECTION CONFIGURATION ---
 // IMPORTANT: For Internet Access (4G/5G), this MUST be a public URL (e.g., ngrok or Heroku)
 // Localhost (10.0.2.2 for Android emulator) will NOT work over the internet.
-const SERVER_URL = 'http://YOUR_PUBLIC_SERVER_ADDRESS:3001'; 
+const SERVER_URL = 'https://multisulcate-colourational-isa.ngrok-free.dev/'; 
 const DEVICE_ID = Platform.OS === 'android' ? 'AND-8392X' : 'IOS-4492A';
 
 // WebRTC Config: STUN servers are required for traversing NATs (connecting over internet)
