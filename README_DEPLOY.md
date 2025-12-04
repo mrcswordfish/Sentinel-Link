@@ -9,7 +9,16 @@ This server manages the connection between the dashboard and the phone.
 2. Run `npm install`.
 3. Run `npm start`.
 4. Your server is now running on `http://localhost:3001`.
-   * *For real remote use, deploy this folder to a service like Heroku, Railway, or Render.*
+
+### 🌍 MAKING IT ACCESSIBLE OVER THE INTERNET (REQUIRED)
+Localhost only works if your phone and computer are on the same Wi-Fi. To control the phone when it's on **4G/5G/LTE**:
+
+1. **Install Ngrok:** Download and install [Ngrok](https://ngrok.com).
+2. **Expose Server:** Open a terminal and run:
+   ```bash
+   ngrok http 3001
+   ```
+3. Copy the `https://....ngrok-free.app` URL provided. This is your **Public Server URL**.
 
 ## 2. The Mobile Client (Target Device)
 This is the app you install on the phone you want to control.
@@ -18,7 +27,9 @@ This is the app you install on the phone you want to control.
 2. Create a new project: `npx react-native init SentinelMobile`.
 3. Copy the contents of `mobile/App.tsx` into your new project's `App.tsx`.
 4. Install the specific native dependencies listed in `mobile/package.json`.
-5. **Important:** Update the `SERVER_URL` in `App.tsx` to point to your deployed Backend Server IP (not localhost, as localhost on the phone refers to the phone itself).
+5. **CRITICAL:** Update `SERVER_URL` in `App.tsx` with your **Public Server URL** (the ngrok link from step 1).
+   * Incorrect: `http://localhost:3001` (Will not work on phone)
+   * Correct: `https://abcd-123-456.ngrok-free.app`
 6. Build and install on your device: `npx react-native run-android` or `run-ios`.
 
 ## 3. The Web Dashboard

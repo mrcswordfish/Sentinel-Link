@@ -9,7 +9,15 @@ interface LiveFeedProps {
   targetDeviceId: string;
 }
 
-const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+// Config for WAN (Wide Area Network) connections
+const config = { 
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    // NOTE: For 4G/5G symmetric NATs, a TURN server is often required here.
+    // e.g., { urls: 'turn:your-turn-server.com', username: '...', credential: '...' }
+  ] 
+};
 
 export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targetDeviceId }) => {
   const videoRef = useRef<HTMLVideoElement>(null);

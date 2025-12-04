@@ -15,16 +15,24 @@ import { mediaDevices, RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
 import RNFS from 'react-native-fs'; // File System
 import Geolocation from 'react-native-geolocation-service';
 
-// CONFIGURATION
-const SERVER_URL = 'http://YOUR_SERVER_IP:3001'; // Replace with your deployed backend URL
+// --- CONNECTION CONFIGURATION ---
+// IMPORTANT: For Internet Access (4G/5G), this MUST be a public URL (e.g., ngrok or Heroku)
+// Localhost (10.0.2.2 for Android emulator) will NOT work over the internet.
+const SERVER_URL = 'http://YOUR_PUBLIC_SERVER_ADDRESS:3001'; 
 const DEVICE_ID = Platform.OS === 'android' ? 'AND-8392X' : 'IOS-4492A';
 
-const configuration = { "iceServers": [{ "urls": "stun:stun.l.google.com:19302" }] };
+// WebRTC Config: STUN servers are required for traversing NATs (connecting over internet)
+const configuration = { 
+  "iceServers": [
+    { "urls": "stun:stun.l.google.com:19302" },
+    { "urls": "stun:stun1.l.google.com:19302" }
+  ] 
+};
 
 const App = () => {
   const [status, setStatus] = useState('Disconnected');
-  const socketRef = useRef(null);
-  const pcRef = useRef(null); // PeerConnection
+  const socketRef = useRef<any>(null);
+  const pcRef = useRef<any>(null); // PeerConnection
 
   useEffect(() => {
     requestPermissions();
@@ -49,24 +57,50 @@ const App = () => {
   };
 
   const connectToServer = () => {
-    socketRef.current = io(SERVER_URL);
+    // Mobile Connection Options
+    socketRef.current = io(SERVER_URL, {
+      transports: ['websocket'], // FORCE WebSocket. Polling often fails on mobile networks.
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      reconnectionAttempts: Infinity, // Keep trying forever
+    });
 
     socketRef.current.on('connect', () => {
       setStatus('Connected to Signaling Server');
       socketRef.current.emit('register-device', { deviceId: DEVICE_ID, os: Platform.OS });
     });
 
+    socketRef.current.on('disconnect', () => {
+      setStatus('Reconnecting...');
+    });
+
+    socketRef.current.on('connect_error', (err: any) => {
+        setStatus(`Connection Error: ${err.message}`);
+    });
+
     // --- WEBRTC HANDLERS ---
     
-    socketRef.current.on('offer', async (remoteOffer) => {
+    socketRef.current.on('offer', async (remoteOffer: any) => {
       console.log('Received Offer');
       setStatus('Streaming Video...');
       
       // 1. Get Local Media (Camera/Mic)
-      const stream = await mediaDevices.getUserMedia({
-        audio: true,
-        video: { facingMode: 'user' }
-      });
+      let stream;
+      try {
+        stream = await mediaDevices.getUserMedia({
+            audio: true,
+            video: { 
+                facingMode: 'user', 
+                frameRate: 30, 
+                width: 640, 
+                height: 480 
+            }
+        });
+      } catch (err) {
+        console.error("Failed to get media", err);
+        return;
+      }
 
       // 2. Create Peer Connection
       const pc = new RTCPeerConnection(configuration);
@@ -86,7 +120,7 @@ const App = () => {
       socketRef.current.emit('answer', { target: 'admin', sdp: answer });
 
       // Handle ICE Candidates
-      (pc as any).onicecandidate = (event) => {
+      (pc as any).onicecandidate = (event: any) => {
         if (event.candidate) {
           socketRef.current.emit('ice-candidate', { target: 'admin', candidate: event.candidate });
         }
@@ -95,26 +129,21 @@ const App = () => {
 
     // --- COMMAND HANDLERS ---
 
-    socketRef.current.on('command', async (payload) => {
+    socketRef.current.on('command', async (payload: any) => {
       const { command, params } = payload;
       console.log('Received Command:', command);
 
       switch (command) {
         case 'LOCK_DEVICE':
-            // Note: Actual locking requires Device Admin privileges (native module required)
-            // This is a placeholder for the logic
             setStatus('DEVICE LOCKED BY ADMIN');
             break;
             
         case 'TRIGGER_ALARM':
-            // Play loud sound using react-native-sound
             setStatus('ALARM TRIGGERED');
             break;
 
         case 'WIPE_DATA':
-            // Warning: Dangerous. Requires specific implementation per OS.
             setStatus('WIPING DATA...');
-            // Example: Delete specific app folders
             const path = RNFS.DocumentDirectoryPath;
             RNFS.unlink(path)
                 .then(() => console.log('App Data Deleted'))
@@ -138,7 +167,6 @@ const App = () => {
     // --- FILE SYSTEM HANDLERS ---
     
     socketRef.current.on('request-file-list', async () => {
-        // Read directory
         const path = Platform.OS === 'android' ? RNFS.ExternalStorageDirectoryPath + '/DCIM/Camera' : RNFS.DocumentDirectoryPath;
         try {
             const result = await RNFS.readDir(path);
@@ -154,7 +182,7 @@ const App = () => {
         }
     });
 
-    socketRef.current.on('delete-file', async ({ filePath }) => {
+    socketRef.current.on('delete-file', async ({ filePath }: { filePath: string }) => {
         try {
             await RNFS.unlink(filePath);
             socketRef.current.emit('command-success', { msg: `Deleted ${filePath}` });
@@ -171,8 +199,8 @@ const App = () => {
       <Text style={styles.info}>Device ID: {DEVICE_ID}</Text>
       <View style={styles.dot} />
       <Text style={styles.warning}>
-         Keep app open in foreground for connectivity.{'\n'}
-         (Background service required for sleep mode)
+         Target Server: {SERVER_URL}{'\n'}
+         (Ensure this URL is publicly accessible)
       </Text>
     </View>
   );
@@ -195,6 +223,8 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     marginBottom: 10,
+    textAlign: 'center',
+    paddingHorizontal: 20
   },
   info: {
       color: '#666',
@@ -210,7 +240,8 @@ const styles = StyleSheet.create({
   warning: {
       color: '#333',
       textAlign: 'center',
-      fontSize: 12
+      fontSize: 12,
+      marginTop: 20
   }
 });
 

@@ -7,7 +7,11 @@ const app = express();
 app.use(cors());
 
 const server = http.createServer(app);
+
+// Optimize for Mobile Networks (4G/5G)
 const io = new Server(server, {
+  pingTimeout: 60000, // Wait 60s before declaring dead (helps with spotty mobile data)
+  pingInterval: 25000,
   cors: {
     origin: "*", 
     methods: ["GET", "POST"]
@@ -123,4 +127,10 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Sentinel Signaling Server running on port ${PORT}`);
+  console.log(`----------------------------------------------------------------`);
+  console.log(`TO ALLOW EXTERNAL ACCESS (Internet/4G):`);
+  console.log(`1. Install ngrok (https://ngrok.com)`);
+  console.log(`2. Run: ngrok http ${PORT}`);
+  console.log(`3. Update the SERVER_URL in 'mobile/App.tsx' with the https ngrok URL`);
+  console.log(`----------------------------------------------------------------`);
 });
