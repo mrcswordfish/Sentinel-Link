@@ -14,7 +14,7 @@ interface Device {
   socketId?: string;
 }
 
-const SERVER_URL = 'http://localhost:3001'; // Update this if your server is elsewhere
+const SERVER_URL = 'https://multisulcate-colourational-isa.ngrok-free.dev/'; // Update this if your server is elsewhere
 
 const App: React.FC = () => {
   const [socket, setSocket] = useState<Socket | null>(null);
