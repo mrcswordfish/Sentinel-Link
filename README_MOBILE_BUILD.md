@@ -154,23 +154,31 @@ This is the fastest way to test while you are coding.
 
 ## Troubleshooting: "I still see the Welcome to React Native screen"
 
-If you installed the app but it shows the default "Welcome" screen instead of the "SENTINEL CLIENT" black screen:
+This usually happens for two reasons: **File Conflict** or **Caching**.
 
-1.  **Verify File Replacement:**
-    Ensure you actually **deleted** the default code in `SentinelMobile/App.tsx` and pasted the new code from Step 4. Save the file (`Ctrl+S`).
+### 1. Check for Duplicate App Files (MOST LIKELY CAUSE)
+New versions of React Native sometimes create `App.js` AND `App.tsx` depending on how you initialized it.
+1. Look at your file explorer in VS Code (left side).
+2. Do you see a file named `App.js`?
+3. If yes, **DELETE IT**.
+4. We only want `App.tsx`.
+5. Run `npx react-native run-android` again.
 
-2.  **Clear Build Cache (Most Common Fix):**
-    React Native sometimes "remembers" the old code. Run this command in your VS Code terminal to force a fresh update:
-    ```bash
-    npx react-native start --reset-cache
-    ```
-    Then, in a second terminal window, run:
-    ```bash
-    npx react-native run-android
-    ```
+### 2. Clear The Metro Cache
+If deleting `App.js` didn't work (or it didn't exist), run this specific command to clear the build memory:
 
-3.  **Shake to Reload:**
-    With the app open on your phone, shake the device physically. A menu will appear. Tap **"Reload"**.
+```bash
+npx react-native start --reset-cache
+```
+
+While that is running, open a **Second Terminal** (Plus button in VS Code terminal) and run:
+
+```bash
+npx react-native run-android
+```
+
+### 3. Shake to Reload
+With the app open on your phone, shake the device physically. A menu will appear. Tap **"Reload"**.
 
 ---
 

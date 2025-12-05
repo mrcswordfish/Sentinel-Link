@@ -6,6 +6,17 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 
+// Add a simple homepage so you know it's working when you open the URL
+app.get('/', (req, res) => {
+  res.send(`
+    <div style="font-family: monospace; background: #111; color: #0f0; height: 100vh; display: flex; align-items: center; justify-content: center; flex-direction: column;">
+      <h1>SENTINEL SERVER ONLINE</h1>
+      <p>Status: Active</p>
+      <p>Port: 3001</p>
+    </div>
+  `);
+});
+
 const server = http.createServer(app);
 
 // Optimize for Mobile Networks (4G/5G)
