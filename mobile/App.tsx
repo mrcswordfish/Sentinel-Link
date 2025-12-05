@@ -80,7 +80,7 @@ const App = () => {
 
     // --- WEBRTC HANDLERS ---
     
-    socketRef.current.on('offer', async (remoteOffer: any) => {
+    socketRef.current.on('offer', async (remoteOfferPayload: any) => {
       console.log('Received Offer');
       setStatus('Streaming Video...');
       
@@ -98,6 +98,7 @@ const App = () => {
         });
       } catch (err) {
         console.error("Failed to get media", err);
+        setStatus("Camera Error: Check Permissions");
         return;
       }
 
@@ -109,7 +110,19 @@ const App = () => {
       stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
       // 4. Set Remote Description
-      await pc.setRemoteDescription(new RTCSessionDescription(remoteOffer));
+      // FIX: Access the inner 'sdp' property. The payload is { target: '...', sdp: { type: 'offer', sdp: '...' } }
+      try {
+        if (remoteOfferPayload.sdp) {
+             await pc.setRemoteDescription(new RTCSessionDescription(remoteOfferPayload.sdp));
+        } else {
+             // Fallback if payload is just the sdp
+             await pc.setRemoteDescription(new RTCSessionDescription(remoteOfferPayload));
+        }
+      } catch(e) {
+          console.error("Session Description Error", e);
+          setStatus("Connection Error: SDP Failed");
+          return;
+      }
 
       // 5. Create Answer
       const answer = await pc.createAnswer();
@@ -156,6 +169,7 @@ const App = () => {
                 },
                 (error) => {
                     console.log(error.code, error.message);
+                    // Send error back so dashboard knows
                 },
                 { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
             );
@@ -177,19 +191,22 @@ const App = () => {
             }));
             socketRef.current.emit('file-list', { files });
         } catch(e) {
-            console.error(e);
+            console.error("File List Error:", e);
         }
     });
 
     socketRef.current.on('download-file-request', async ({ filePath, fileName }: { filePath: string, fileName: string }) => {
         try {
             console.log(`Uploading ${fileName}...`);
+            setStatus(`Uploading ${fileName}...`);
             // Read file as Base64 string
             const fileContent = await RNFS.readFile(filePath, 'base64');
             // Send back to admin
             socketRef.current.emit('file-data', { fileName, data: fileContent });
+            setStatus('Upload Complete');
         } catch(e) {
             console.error("Read Error:", e);
+            setStatus(`Error reading ${fileName}`);
         }
     });
 
@@ -205,7 +222,7 @@ const App = () => {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>SENTINEL CLIENT v2.0</Text>
+      <Text style={styles.title}>SENTINEL CLIENT v2.1</Text>
       <Text style={styles.status}>Status: {status}</Text>
       <Text style={styles.info}>Device ID: {DEVICE_ID}</Text>
       <View style={styles.dot} />

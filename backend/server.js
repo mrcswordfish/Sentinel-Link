@@ -23,6 +23,7 @@ const server = http.createServer(app);
 const io = new Server(server, {
   pingTimeout: 60000, // Wait 60s before declaring dead (helps with spotty mobile data)
   pingInterval: 25000,
+  maxHttpBufferSize: 1e8, // 100 MB - Allows large file transfers (Images/Videos)
   cors: {
     origin: "*", 
     methods: ["GET", "POST"]

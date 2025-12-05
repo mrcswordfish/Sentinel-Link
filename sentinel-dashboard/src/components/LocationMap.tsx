@@ -9,6 +9,7 @@ interface LocationMapProps {
 export const LocationMap: React.FC<LocationMapProps> = ({ onLog, socket }) => {
   const [coords, setCoords] = useState<{lat: number, lng: number} | null>(null);
   const [isSimulated, setIsSimulated] = useState(false);
+  const timerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!socket) return;
@@ -18,6 +19,7 @@ export const LocationMap: React.FC<LocationMapProps> = ({ onLog, socket }) => {
 
     // Listen for updates
     const handleLocation = (position: any) => {
+        if (timerRef.current) clearTimeout(timerRef.current); // Clear simulation timer if real data arrives
         const { latitude, longitude } = position.coords;
         setCoords({ lat: latitude, lng: longitude });
         setIsSimulated(false);
@@ -27,7 +29,8 @@ export const LocationMap: React.FC<LocationMapProps> = ({ onLog, socket }) => {
     socket.on('location-update', handleLocation);
 
     // Timeout: If no location in 10s, mock it
-    const timeout = setTimeout(() => {
+    // Use window.setTimeout for browser compatibility if needed, but NodeJS.Timeout is standard in this env
+    timerRef.current = window.setTimeout(() => {
         setCoords((current) => {
             if (!current) {
                 onLog("GPS Signal Weak. Switching to Simulated Location.", 'warning');
@@ -39,8 +42,8 @@ export const LocationMap: React.FC<LocationMapProps> = ({ onLog, socket }) => {
     }, 10000);
 
     return () => {
+        if (timerRef.current) clearTimeout(timerRef.current);
         socket.off('location-update', handleLocation);
-        clearTimeout(timeout);
     };
   }, [socket, onLog]);
 
