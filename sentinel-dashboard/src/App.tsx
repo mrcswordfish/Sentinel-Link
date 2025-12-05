@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { LiveFeed } from './components/LiveFeed';
 import { LocationMap } from './components/LocationMap';
@@ -32,7 +32,9 @@ const App: React.FC = () => {
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [serverConnected, setServerConnected] = useState(false);
 
-  const addLog = (message: string, type: LogEntry['type'] = 'info') => {
+  // FIX: Memoize this function so it doesn't change on every render.
+  // This prevents child components (like LiveFeed) from resetting endlessly.
+  const addLog = useCallback((message: string, type: LogEntry['type'] = 'info') => {
     const newLog: LogEntry = {
       id: Math.random().toString(36).substr(2, 9),
       timestamp: new Date(),
@@ -40,7 +42,7 @@ const App: React.FC = () => {
       message,
     };
     setLogs(prev => [...prev.slice(-50), newLog]);
-  };
+  }, []);
 
   // --- SOCKET CONNECTION ---
   useEffect(() => {
@@ -100,7 +102,7 @@ const App: React.FC = () => {
     });
 
     return () => { newSocket.close(); }
-  }, []);
+  }, [addLog, selectedDevice]);
 
   // Auto-scroll logs
   useEffect(() => {
