@@ -76,10 +76,10 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             
-            // FIX: Explicitly construct the object to avoid serialization issues
-            // Force type to 'offer' to prevent undefined errors on mobile
+            // Clean Payload: Send ONLY what is needed.
+            // Mobile app defaults to 'offer' type if missing.
             const cleanOffer = {
-                type: offer.type || 'offer',
+                type: 'offer',
                 sdp: offer.sdp
             };
 
@@ -93,7 +93,11 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
     const handleAnswer = async (payload: any) => {
         if (pcRef.current) {
             try {
-                await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+                // Robust answer handling
+                const sdp = payload.sdp?.sdp || payload.sdp;
+                const type = payload.sdp?.type || 'answer';
+                
+                await pcRef.current.setRemoteDescription(new RTCSessionDescription({ type, sdp }));
             } catch (e) { console.error("Set Remote Desc Error", e); }
         }
     };

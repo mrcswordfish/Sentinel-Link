@@ -18,7 +18,8 @@ import Geolocation from 'react-native-geolocation-service';
 // --- CONNECTION CONFIGURATION ---
 // UPDATED: Using your specific Ngrok URL
 const SERVER_URL = 'https://multisulcate-colourational-isa.ngrok-free.dev'; 
-const DEVICE_ID = Platform.OS === 'android' ? 'AND-8392X' : 'IOS-4492A';
+// Add random suffix to ID to prevent collisions during testing
+const DEVICE_ID = (Platform.OS === 'android' ? 'AND-' : 'IOS-') + Math.floor(Math.random() * 9000 + 1000);
 
 // WebRTC Config: STUN servers are required for traversing NATs (connecting over internet)
 const configuration = { 
@@ -107,41 +108,51 @@ const App = () => {
         }
 
         // --- 1. Parse SDP Safely ---
-        // Robust logic to find the 'sdp' string and 'type' regardless of nesting
         let sdpString = "";
-        let sdpType = "offer"; // Default since this is the 'offer' event
-
+        
         if (remoteOfferPayload) {
-            if (typeof remoteOfferPayload.sdp === 'string') {
-                 // Case: { target: '...', sdp: "v=0..." }
+             // Handle double-stringified JSON (common socket issue)
+             if (typeof remoteOfferPayload === 'string') {
+                 try {
+                    const parsed = JSON.parse(remoteOfferPayload);
+                    sdpString = parsed.sdp || parsed;
+                 } catch(e) {
+                    // It's just a raw string?
+                    sdpString = remoteOfferPayload;
+                 }
+             }
+             else if (remoteOfferPayload.sdp) {
+                // Handle nested object { sdp: { type: 'offer', sdp: '...' } }
+                if (typeof remoteOfferPayload.sdp === 'object' && remoteOfferPayload.sdp.sdp) {
+                    sdpString = remoteOfferPayload.sdp.sdp;
+                } else {
+                    // Handle standard { sdp: "v=0..." }
+                    sdpString = remoteOfferPayload.sdp;
+                }
+             } else if (remoteOfferPayload.type && remoteOfferPayload.sdp) {
                  sdpString = remoteOfferPayload.sdp;
-                 if (remoteOfferPayload.type) sdpType = remoteOfferPayload.type;
-            } else if (typeof remoteOfferPayload.sdp === 'object') {
-                 // Case: { target: '...', sdp: { type: 'offer', sdp: "v=0..." } }
-                 sdpString = remoteOfferPayload.sdp.sdp;
-                 if (remoteOfferPayload.sdp.type) sdpType = remoteOfferPayload.sdp.type;
-            } else if (remoteOfferPayload.type && !remoteOfferPayload.sdp) {
-                 // Weird case, might be direct object
-                 // Ignore for now
-            }
+             }
         }
 
-        if (!sdpString) {
-             console.error("Could not extract SDP string from payload", remoteOfferPayload);
-             setStatus("Connection Failed: Bad Handshake Format");
+        // Validate SDP
+        if (!sdpString || typeof sdpString !== 'string' || !sdpString.startsWith('v=')) {
+             console.error("Invalid SDP String received", remoteOfferPayload);
+             setStatus("Connection Failed: Invalid Protocol");
              return;
         }
 
-        // --- 2. Get Media Stream ---
+        // --- 2. Get Media Stream (Simplified Constraints) ---
         let stream;
         try {
+            // REMOVED frameRate/width/height constraints. 
+            // Many Android devices crash if you request unsupported resolutions.
             stream = await mediaDevices.getUserMedia({
                 audio: true,
-                video: { facingMode: 'user', frameRate: 30, width: 640, height: 480 }
+                video: { facingMode: 'user' } 
             });
         } catch (mediaErr) {
             console.error("getUserMedia Error:", mediaErr);
-            setStatus("Camera Error: Check Permissions");
+            setStatus("Camera Error: Device not supported or permission denied");
             return;
         }
 
@@ -153,19 +164,19 @@ const App = () => {
         const tracks = stream.getTracks();
         tracks.forEach(track => pc.addTrack(track, stream));
 
-        // --- 4. Set Remote Description (The likely crash point) ---
+        // --- 4. Set Remote Description ---
         try {
-            // Force type to 'offer' if it was undefined to prevent "invalid type" error
-            const cleanType = (sdpType && sdpType !== 'undefined') ? sdpType : 'offer';
-            
+            // FIX: HARDCODE 'offer' TYPE.
+            // We are in the 'offer' handler, so it is impossible for it to be anything else.
+            // This prevents "invalid type: undefined" crashes completely.
             const sessionDesc = new RTCSessionDescription({
-                type: cleanType, 
+                type: 'offer', 
                 sdp: sdpString
             });
             await pc.setRemoteDescription(sessionDesc);
         } catch (sdpErr) {
              console.error("setRemoteDescription Error:", sdpErr);
-             setStatus("Handshake Error: Remote Description Failed");
+             setStatus("Handshake Error: Incompatible SDP");
              pc.close();
              return;
         }
@@ -175,9 +186,10 @@ const App = () => {
         await pc.setLocalDescription(answer);
 
         // --- 6. Send Answer ---
+        // Send simplified answer payload
         socketRef.current.emit('answer', { 
             target: 'admin', 
-            sdp: { type: answer.type, sdp: answer.sdp } 
+            sdp: { type: 'answer', sdp: answer.sdp } 
         });
 
         // ICE Candidates
@@ -214,9 +226,11 @@ const App = () => {
             case 'WIPE_DATA':
                 setStatus('WIPING DATA...');
                 const path = RNFS.DocumentDirectoryPath;
-                RNFS.unlink(path)
-                    .then(() => console.log('App Data Deleted'))
-                    .catch((err) => console.log(err.message));
+                // Be careful deleting this path
+                try {
+                     await RNFS.unlink(path);
+                     console.log('App Data Deleted');
+                } catch(e) { console.log(e); }
                 break;
                 
             case 'GET_LOCATION':
@@ -308,7 +322,7 @@ const App = () => {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>SENTINEL CLIENT v2.3</Text>
+      <Text style={styles.title}>SENTINEL CLIENT v2.4</Text>
       <Text style={styles.status}>Status: {status}</Text>
       <Text style={styles.info}>Device ID: {DEVICE_ID}</Text>
       <View style={styles.dot} />
