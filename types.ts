@@ -16,11 +16,14 @@ export interface DeviceStatus {
   lastSeen: Date;
 }
 
-export enum SecurityMode {
-  MONITORING = 'MONITORING',
-  TRACKING = 'TRACKING',
-  LOCKDOWN = 'LOCKDOWN',
-}
+// Fixed: Changed from 'enum' to 'const' to satisfy Vite/Vercel build strictness
+export const SecurityMode = {
+  MONITORING: 'MONITORING',
+  TRACKING: 'TRACKING',
+  LOCKDOWN: 'LOCKDOWN',
+} as const;
+
+export type SecurityMode = typeof SecurityMode[keyof typeof SecurityMode];
 
 export interface SignalDataPoint {
   time: string;

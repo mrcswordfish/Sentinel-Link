@@ -1,6 +1,7 @@
 import React from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
-import { SignalDataPoint } from '../types';
+// Fixed: Explicit type import
+import type { SignalDataPoint } from '../types';
 
 interface SignalChartProps {
   data: SignalDataPoint[];

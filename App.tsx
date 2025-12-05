@@ -5,8 +5,10 @@ import { LocationMap } from './components/LocationMap';
 import { SignalChart } from './components/SignalChart';
 import { FileManager } from './components/FileManager';
 import { DownloadModal } from './components/DownloadModal';
-import { LogEntry, SignalDataPoint } from './types';
 import { generateSecurityReport } from './services/geminiService';
+
+// Fixed: Explicit type imports
+import type { LogEntry, SignalDataPoint } from './types';
 
 interface Device {
   deviceId: string;
