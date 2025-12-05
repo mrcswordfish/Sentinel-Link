@@ -24,7 +24,6 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'IDLE' | 'CONNECTING' | 'CONNECTED' | 'TIMEOUT' | 'SIMULATION'>('IDLE');
-  // Fixed: Use number for browser setTimeout return type
   const timeoutRef = useRef<number | null>(null);
 
   // Memoize onLog to prevent useEffect loops
@@ -76,7 +75,15 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
         try {
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-            socket.emit('offer', { target: targetDeviceId, sdp: offer });
+            
+            // FIX: Explicitly construct the object to avoid serialization issues
+            // Some browsers attach extra non-serializable properties to the offer object
+            const cleanOffer = {
+                type: offer.type,
+                sdp: offer.sdp
+            };
+
+            socket.emit('offer', { target: targetDeviceId, sdp: cleanOffer });
         } catch (e: any) {
             log(`WebRTC Error: ${e.message}`, 'error');
             setConnectionStatus('TIMEOUT');

