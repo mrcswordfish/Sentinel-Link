@@ -91,117 +91,152 @@ const App = () => {
         setStatus(`Connection Error: ${err.message}`);
     });
 
-    // --- WEBRTC HANDLERS ---
+    // --- WEBRTC HANDLERS (CRASH PROOFING) ---
     
     socketRef.current.on('offer', async (remoteOfferPayload: any) => {
+      // WRAP EVERYTHING in a top-level try-catch to prevent App Crash
       try {
-        console.log('Received Offer');
-        setStatus('Streaming Video...');
-        
-        // 1. Get Local Media (Camera/Mic)
+        console.log('Received Offer Payload'); 
+        setStatus('Negotiating Connection...');
+
+        // Close any existing connection to avoid state conflict
+        if (pcRef.current) {
+            console.log("Closing existing peer connection");
+            try { pcRef.current.close(); } catch(e) {}
+            pcRef.current = null;
+        }
+
+        // --- 1. Parse SDP Safely ---
+        // Robust logic to find the 'sdp' string and 'type' regardless of nesting
+        let sdpString = "";
+        let sdpType = "offer"; // Default since this is the 'offer' event
+
+        if (remoteOfferPayload) {
+            if (typeof remoteOfferPayload.sdp === 'string') {
+                 // Case: { target: '...', sdp: "v=0..." }
+                 sdpString = remoteOfferPayload.sdp;
+                 if (remoteOfferPayload.type) sdpType = remoteOfferPayload.type;
+            } else if (typeof remoteOfferPayload.sdp === 'object') {
+                 // Case: { target: '...', sdp: { type: 'offer', sdp: "v=0..." } }
+                 sdpString = remoteOfferPayload.sdp.sdp;
+                 if (remoteOfferPayload.sdp.type) sdpType = remoteOfferPayload.sdp.type;
+            } else if (remoteOfferPayload.type && !remoteOfferPayload.sdp) {
+                 // Weird case, might be direct object
+                 // Ignore for now
+            }
+        }
+
+        if (!sdpString) {
+             console.error("Could not extract SDP string from payload", remoteOfferPayload);
+             setStatus("Connection Failed: Bad Handshake Format");
+             return;
+        }
+
+        // --- 2. Get Media Stream ---
         let stream;
         try {
             stream = await mediaDevices.getUserMedia({
                 audio: true,
-                video: { 
-                    facingMode: 'user', 
-                    frameRate: 30, 
-                    width: 640, 
-                    height: 480 
-                }
+                video: { facingMode: 'user', frameRate: 30, width: 640, height: 480 }
             });
-        } catch (err) {
-            console.error("Failed to get media", err);
+        } catch (mediaErr) {
+            console.error("getUserMedia Error:", mediaErr);
             setStatus("Camera Error: Check Permissions");
             return;
         }
 
-        // 2. Create Peer Connection
+        // --- 3. Create Peer Connection ---
         const pc = new RTCPeerConnection(configuration);
         pcRef.current = pc;
-
-        // 3. Add Track to Peer Connection
-        stream.getTracks().forEach(track => pc.addTrack(track, stream));
-
-        // 4. Set Remote Description
-        // FIX: Robust check for nested SDP objects to prevent crashes
-        let sdp = null;
         
-        if (remoteOfferPayload && typeof remoteOfferPayload === 'object') {
-            if (remoteOfferPayload.type && remoteOfferPayload.sdp) {
-                // The payload IS the SDP object
-                sdp = remoteOfferPayload;
-            } else if (remoteOfferPayload.sdp && remoteOfferPayload.sdp.type && remoteOfferPayload.sdp.sdp) {
-                // The payload WRAPS the SDP object
-                sdp = remoteOfferPayload.sdp;
-            }
+        // Add tracks
+        const tracks = stream.getTracks();
+        tracks.forEach(track => pc.addTrack(track, stream));
+
+        // --- 4. Set Remote Description (The likely crash point) ---
+        try {
+            // Force type to 'offer' if it was undefined to prevent "invalid type" error
+            const cleanType = (sdpType && sdpType !== 'undefined') ? sdpType : 'offer';
+            
+            const sessionDesc = new RTCSessionDescription({
+                type: cleanType, 
+                sdp: sdpString
+            });
+            await pc.setRemoteDescription(sessionDesc);
+        } catch (sdpErr) {
+             console.error("setRemoteDescription Error:", sdpErr);
+             setStatus("Handshake Error: Remote Description Failed");
+             pc.close();
+             return;
         }
 
-        if (!sdp) {
-            console.error("Invalid Offer Payload Received", remoteOfferPayload);
-            setStatus('Error: Invalid SDP Format');
-            return;
-        }
-
-        // Explicitly construct RTCSessionDescription to ensure type safety
-        await pc.setRemoteDescription(new RTCSessionDescription({
-            type: sdp.type,
-            sdp: sdp.sdp
-        }));
-
-        // 5. Create Answer
+        // --- 5. Create Answer ---
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
-        // 6. Send Answer to Admin
-        socketRef.current.emit('answer', { target: 'admin', sdp: answer });
+        // --- 6. Send Answer ---
+        socketRef.current.emit('answer', { 
+            target: 'admin', 
+            sdp: { type: answer.type, sdp: answer.sdp } 
+        });
 
-        // Handle ICE Candidates
+        // ICE Candidates
         (pc as any).onicecandidate = (event: any) => {
             if (event.candidate) {
-            socketRef.current.emit('ice-candidate', { target: 'admin', candidate: event.candidate });
+                socketRef.current.emit('ice-candidate', { target: 'admin', candidate: event.candidate });
             }
         };
-      } catch (err: any) {
-        console.error("WebRTC Handshake Error:", err);
-        setStatus(`Call Error: ${err.message}`);
+
+        setStatus('Streaming Active');
+
+      } catch (globalErr: any) {
+         console.error("CRITICAL WEBRTC ERROR:", globalErr);
+         setStatus(`Critical Error: ${globalErr?.message}`);
       }
     });
 
     // --- COMMAND HANDLERS ---
 
     socketRef.current.on('command', async (payload: any) => {
-      const { command, params } = payload;
-      console.log('Received Command:', command);
+      try {
+          const { command, params } = payload;
+          console.log('Received Command:', command);
 
-      switch (command) {
-        case 'LOCK_DEVICE':
-            setStatus('DEVICE LOCKED BY ADMIN');
-            break;
-            
-        case 'TRIGGER_ALARM':
-            setStatus('ALARM TRIGGERED');
-            break;
+          switch (command) {
+            case 'LOCK_DEVICE':
+                setStatus('DEVICE LOCKED BY ADMIN');
+                break;
+                
+            case 'TRIGGER_ALARM':
+                setStatus('ALARM TRIGGERED');
+                break;
 
-        case 'WIPE_DATA':
-            setStatus('WIPING DATA...');
-            const path = RNFS.DocumentDirectoryPath;
-            RNFS.unlink(path)
-                .then(() => console.log('App Data Deleted'))
-                .catch((err) => console.log(err.message));
-            break;
-            
-        case 'GET_LOCATION':
-            Geolocation.getCurrentPosition(
-                (position) => {
-                    socketRef.current.emit('location-update', position);
-                },
-                (error) => {
-                    console.log(error.code, error.message);
-                },
-                { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
-            );
-            break;
+            case 'WIPE_DATA':
+                setStatus('WIPING DATA...');
+                const path = RNFS.DocumentDirectoryPath;
+                RNFS.unlink(path)
+                    .then(() => console.log('App Data Deleted'))
+                    .catch((err) => console.log(err.message));
+                break;
+                
+            case 'GET_LOCATION':
+                try {
+                    Geolocation.getCurrentPosition(
+                        (position) => {
+                            if (socketRef.current) socketRef.current.emit('location-update', position);
+                        },
+                        (error) => {
+                            console.log(error.code, error.message);
+                        },
+                        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+                    );
+                } catch (locErr) {
+                    console.log("Location Error", locErr);
+                }
+                break;
+          }
+      } catch (cmdErr) {
+          console.error("Command Error", cmdErr);
       }
     });
     
@@ -273,7 +308,7 @@ const App = () => {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>SENTINEL CLIENT v2.2</Text>
+      <Text style={styles.title}>SENTINEL CLIENT v2.3</Text>
       <Text style={styles.status}>Status: {status}</Text>
       <Text style={styles.info}>Device ID: {DEVICE_ID}</Text>
       <View style={styles.dot} />

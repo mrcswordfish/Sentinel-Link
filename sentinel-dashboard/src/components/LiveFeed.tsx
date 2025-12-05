@@ -77,9 +77,9 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
             await pc.setLocalDescription(offer);
             
             // FIX: Explicitly construct the object to avoid serialization issues
-            // Some browsers attach extra non-serializable properties to the offer object
+            // Force type to 'offer' to prevent undefined errors on mobile
             const cleanOffer = {
-                type: offer.type,
+                type: offer.type || 'offer',
                 sdp: offer.sdp
             };
 
