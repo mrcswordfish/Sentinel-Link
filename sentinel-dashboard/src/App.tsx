@@ -44,12 +44,14 @@ const App: React.FC = () => {
 
   // --- SOCKET CONNECTION ---
   useEffect(() => {
-    // CRITICAL FIX: Add headers to bypass Ngrok warning page and force websocket
+    // FIX: Use 'polling' first so custom headers (ngrok-skip) can be sent.
+    // Browsers CANNOT send custom headers on pure WebSocket connections.
     const newSocket = io(SERVER_URL, {
-      transports: ['websocket'],
+      transports: ['polling', 'websocket'], 
       extraHeaders: {
         "ngrok-skip-browser-warning": "true"
-      }
+      },
+      withCredentials: false
     });
     setSocket(newSocket);
 
@@ -67,7 +69,12 @@ const App: React.FC = () => {
 
     newSocket.on('connect_error', (err) => {
       console.error("Socket Connection Error:", err);
-      addLog(`Connection Error: ${err.message}`, 'error');
+      // Helpful debug message for Ngrok issues
+      if (err.message === "xhr poll error") {
+         addLog("Connection Failed: Ngrok might be blocking the request. Check console.", 'error');
+      } else {
+         addLog(`Connection Error: ${err.message}`, 'error');
+      }
     });
 
     // Device Discovery Events
