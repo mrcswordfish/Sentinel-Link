@@ -152,6 +152,28 @@ This is the fastest way to test while you are coding.
 
 ---
 
+## Troubleshooting: "I still see the Welcome to React Native screen"
+
+If you installed the app but it shows the default "Welcome" screen instead of the "SENTINEL CLIENT" black screen:
+
+1.  **Verify File Replacement:**
+    Ensure you actually **deleted** the default code in `SentinelMobile/App.tsx` and pasted the new code from Step 4. Save the file (`Ctrl+S`).
+
+2.  **Clear Build Cache (Most Common Fix):**
+    React Native sometimes "remembers" the old code. Run this command in your VS Code terminal to force a fresh update:
+    ```bash
+    npx react-native start --reset-cache
+    ```
+    Then, in a second terminal window, run:
+    ```bash
+    npx react-native run-android
+    ```
+
+3.  **Shake to Reload:**
+    With the app open on your phone, shake the device physically. A menu will appear. Tap **"Reload"**.
+
+---
+
 ## Phase 8: Generate Standalone APK (No USB needed)
 
 Use this method if you want a file (`.apk`) that you can download, email, or install on any Android phone without needing your laptop connected.
