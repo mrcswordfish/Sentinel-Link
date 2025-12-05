@@ -9,7 +9,6 @@ interface LiveFeedProps {
   targetDeviceId: string;
 }
 
-// Config for WAN (Wide Area Network) connections
 const config = { 
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -24,14 +23,13 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<'IDLE' | 'CONNECTING' | 'CONNECTED'>('IDLE');
-  
-  // Use a ref for onLog to use it inside useEffect without adding it as a dependency
-  // This prevents infinite loops if the parent component doesn't memoize onLog correctly.
+  const [connectionStatus, setConnectionStatus] = useState<'IDLE' | 'CONNECTING' | 'CONNECTED' | 'TIMEOUT' | 'SIMULATION'>('IDLE');
+  // Fixed: Use number for browser setTimeout return type
+  const timeoutRef = useRef<number | null>(null);
+
+  // Memoize onLog to prevent useEffect loops
   const onLogRef = useRef(onLog);
-  useEffect(() => {
-    onLogRef.current = onLog;
-  }, [onLog]);
+  useEffect(() => { onLogRef.current = onLog; }, [onLog]);
 
   useEffect(() => {
     if (!active || !socket || !targetDeviceId) return;
@@ -42,12 +40,21 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
     const startCall = async () => {
         setConnectionStatus('CONNECTING');
         log("Initializing WebRTC Handshake...", 'info');
+        
+        // Set a timeout to detect failure
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        timeoutRef.current = window.setTimeout(() => {
+            if (connectionStatus !== 'CONNECTED') {
+                setConnectionStatus('TIMEOUT');
+                log("Connection timed out. Target may be behind strict NAT.", 'error');
+            }
+        }, 15000);
 
         pc = new RTCPeerConnection(config);
         pcRef.current = pc;
 
-        // Handle incoming stream
         pc.ontrack = (event) => {
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
             log("Remote video track received.", 'success');
             const remoteStream = event.streams[0];
             setStream(remoteStream);
@@ -63,7 +70,6 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
             }
         };
 
-        // Create Offer
         pc.addTransceiver('video', { direction: 'recvonly' });
         pc.addTransceiver('audio', { direction: 'recvonly' });
 
@@ -73,17 +79,15 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
             socket.emit('offer', { target: targetDeviceId, sdp: offer });
         } catch (e: any) {
             log(`WebRTC Error: ${e.message}`, 'error');
+            setConnectionStatus('TIMEOUT');
         }
     };
 
-    // Socket listeners for WebRTC
     const handleAnswer = async (payload: any) => {
         if (pcRef.current) {
             try {
                 await pcRef.current.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-            } catch (e) {
-                console.error("Set Remote Desc Error", e);
-            }
+            } catch (e) { console.error("Set Remote Desc Error", e); }
         }
     };
 
@@ -91,9 +95,7 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
         if (pcRef.current) {
             try {
                 await pcRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
-            } catch (e) {
-                console.error("Add ICE Error", e);
-            }
+            } catch (e) { console.error("Add ICE Error", e); }
         }
     };
 
@@ -104,18 +106,30 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
 
     return () => {
         if (pcRef.current) pcRef.current.close();
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
         socket.off('answer', handleAnswer);
         socket.off('ice-candidate', handleCandidate);
         setConnectionStatus('IDLE');
         setStream(null);
     };
-  }, [active, socket, targetDeviceId]); // Only re-run if these specific props change
+  }, [active, socket, targetDeviceId]);
 
   const takeSnapshot = useCallback(async () => {
-    if (!videoRef.current || !canvasRef.current) return;
+    if (!canvasRef.current) return;
+    
+    // If in simulation, simulate a snapshot of a "dark room"
+    if (connectionStatus === 'SIMULATION' || !videoRef.current) {
+         setAnalyzing(true);
+         onLogRef.current("Analyzing simulated frame...", 'info');
+         setTimeout(() => {
+             onLogRef.current("AI Report: Dark environment detected. No distinct features. Device appears stationary.", 'ai');
+             setAnalyzing(false);
+         }, 2000);
+         return;
+    }
 
     const context = canvasRef.current.getContext('2d');
-    if (context) {
+    if (context && videoRef.current) {
       context.drawImage(videoRef.current, 0, 0, 640, 480);
       const imageData = canvasRef.current.toDataURL('image/jpeg', 0.8);
       
@@ -127,12 +141,17 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
       onLogRef.current(`AI Report: ${analysis}`, 'ai');
       setAnalyzing(false);
     }
-  }, []);
+  }, [connectionStatus]);
+
+  const enableSimulation = () => {
+      setConnectionStatus('SIMULATION');
+      onLogRef.current("Switched to Simulation Mode.", 'warning');
+  };
 
   return (
     <div className="relative w-full h-full bg-black rounded-lg overflow-hidden border border-gray-800 shadow-2xl group flex flex-col">
       <div className="relative flex-1 bg-black overflow-hidden flex items-center justify-center">
-        {stream ? (
+        {connectionStatus === 'CONNECTED' && stream ? (
             <video 
                 ref={videoRef}
                 autoPlay 
@@ -140,12 +159,31 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
                 playsInline
                 className={`w-full h-full object-cover opacity-90 transition-opacity ${analyzing ? 'opacity-50' : ''}`}
             />
+        ) : connectionStatus === 'SIMULATION' ? (
+            <div className="w-full h-full bg-gray-900 flex flex-col items-center justify-center relative overflow-hidden">
+                <div className="absolute inset-0 opacity-10 bg-[url('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExcHh5cnN5eWw5eXJ5eWw5eXJ5eWw5eXJ5eWw5eXJ5eWw5eXJ5eWw5/26tn33aiTi1jWW6k0/giphy.gif')] bg-cover"></div>
+                <div className="text-green-500 font-mono text-sm z-10">SIMULATION MODE ACTIVE</div>
+                <div className="text-gray-500 text-xs mt-2">NO REAL FEED AVAILABLE</div>
+            </div>
         ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center text-gray-700">
+            <div className="w-full h-full flex flex-col items-center justify-center text-gray-700 px-4 text-center">
                 {connectionStatus === 'CONNECTING' ? (
                     <div className="flex flex-col items-center">
                          <div className="w-10 h-10 border-4 border-green-500 border-t-transparent rounded-full animate-spin mb-4"></div>
                          <p className="text-xs font-mono text-green-500">ESTABLISHING SECURE LINK...</p>
+                    </div>
+                ) : connectionStatus === 'TIMEOUT' ? (
+                     <div className="flex flex-col items-center animate-fade-in">
+                        <svg className="w-10 h-10 text-red-500 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <p className="text-xs font-mono text-red-400 mb-4">CONNECTION TIMED OUT</p>
+                        <button 
+                            onClick={enableSimulation}
+                            className="bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded text-xs border border-gray-600"
+                        >
+                            SWITCH TO SIMULATION
+                        </button>
                     </div>
                 ) : (
                     <>
@@ -163,9 +201,9 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
         {/* Overlay UI */}
         <div className="absolute inset-0 pointer-events-none p-4 flex flex-col justify-between z-10">
             <div className="flex justify-between items-start">
-            <div className={`flex items-center gap-2 text-white text-xs px-2 py-1 rounded border font-mono ${connectionStatus === 'CONNECTED' ? 'bg-red-900/80 border-red-500' : 'bg-gray-900/80 border-gray-600'}`}>
-                {connectionStatus === 'CONNECTED' && <div className="w-2 h-2 rounded-full bg-red-500 mr-1 animate-pulse"></div>}
-                {connectionStatus === 'CONNECTED' ? 'LIVE' : 'OFFLINE'}
+            <div className={`flex items-center gap-2 text-white text-xs px-2 py-1 rounded border font-mono ${connectionStatus === 'CONNECTED' ? 'bg-red-900/80 border-red-500' : connectionStatus === 'SIMULATION' ? 'bg-blue-900/80 border-blue-500' : 'bg-gray-900/80 border-gray-600'}`}>
+                {(connectionStatus === 'CONNECTED' || connectionStatus === 'SIMULATION') && <div className={`w-2 h-2 rounded-full ${connectionStatus === 'CONNECTED' ? 'bg-red-500' : 'bg-blue-500'} mr-1 animate-pulse`}></div>}
+                {connectionStatus === 'CONNECTED' ? 'LIVE' : connectionStatus === 'SIMULATION' ? 'SIMULATED' : 'OFFLINE'}
             </div>
             </div>
         </div>
@@ -175,7 +213,7 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
       <div className="h-14 bg-gray-900 border-t border-gray-800 flex items-center justify-center px-4 z-20">
             <button 
             onClick={takeSnapshot}
-            disabled={!stream || analyzing}
+            disabled={(!stream && connectionStatus !== 'SIMULATION') || analyzing}
             className="bg-gray-800 hover:bg-gray-700 text-white p-2 rounded-full border border-gray-600 transition-colors disabled:opacity-50 flex items-center gap-2 px-4"
             >
             {analyzing ? (

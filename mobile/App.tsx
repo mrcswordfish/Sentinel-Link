@@ -181,6 +181,18 @@ const App = () => {
         }
     });
 
+    socketRef.current.on('download-file-request', async ({ filePath, fileName }: { filePath: string, fileName: string }) => {
+        try {
+            console.log(`Uploading ${fileName}...`);
+            // Read file as Base64 string
+            const fileContent = await RNFS.readFile(filePath, 'base64');
+            // Send back to admin
+            socketRef.current.emit('file-data', { fileName, data: fileContent });
+        } catch(e) {
+            console.error("Read Error:", e);
+        }
+    });
+
     socketRef.current.on('delete-file', async ({ filePath }: { filePath: string }) => {
         try {
             await RNFS.unlink(filePath);

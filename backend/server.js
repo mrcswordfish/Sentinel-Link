@@ -121,6 +121,19 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('file-list-update', files);
   });
 
+  socket.on('download-file', ({ targetDeviceId, filePath, fileName }) => {
+     // Admin wants to download: Relay request to device
+     const targetDevice = Array.from(connectedDevices.values()).find(d => d.deviceId === targetDeviceId);
+     if (targetDevice) {
+         io.to(targetDevice.socketId).emit('download-file-request', { filePath, fileName });
+     }
+  });
+
+  socket.on('file-data', ({ fileName, data }) => {
+      // Device sent file data: Relay to all admins (or specific one)
+      socket.broadcast.emit('file-data', { fileName, data });
+  });
+
   socket.on('delete-file', ({ targetDeviceId, filePath }) => {
      const targetDevice = Array.from(connectedDevices.values()).find(d => d.deviceId === targetDeviceId);
      if (targetDevice) io.to(targetDevice.socketId).emit('delete-file', { filePath });
