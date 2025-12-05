@@ -44,7 +44,13 @@ const App: React.FC = () => {
 
   // --- SOCKET CONNECTION ---
   useEffect(() => {
-    const newSocket = io(SERVER_URL);
+    // CRITICAL FIX: Add headers to bypass Ngrok warning page and force websocket
+    const newSocket = io(SERVER_URL, {
+      transports: ['websocket'],
+      extraHeaders: {
+        "ngrok-skip-browser-warning": "true"
+      }
+    });
     setSocket(newSocket);
 
     newSocket.on('connect', () => {
@@ -57,6 +63,11 @@ const App: React.FC = () => {
     newSocket.on('disconnect', () => {
       setServerConnected(false);
       addLog('Disconnected from server', 'error');
+    });
+
+    newSocket.on('connect_error', (err) => {
+      console.error("Socket Connection Error:", err);
+      addLog(`Connection Error: ${err.message}`, 'error');
     });
 
     // Device Discovery Events
