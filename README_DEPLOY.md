@@ -24,19 +24,25 @@ Localhost only works if your phone and computer are on the same Wi-Fi. To contro
 This is the app you install on the phone you want to control.
 
 1. You need a React Native development environment (Node, JDK, Android Studio/Xcode).
-2. Create a new project: `npx react-native init SentinelMobile`.
-3. Copy the contents of `mobile/App.tsx` into your new project's `App.tsx`.
-4. Install the specific native dependencies listed in `mobile/package.json`.
-5. **CRITICAL:** Update `SERVER_URL` in `App.tsx` with your **Public Server URL** (the ngrok link from step 1).
+2. Follow the detailed steps in **README_MOBILE_BUILD.md** to set up your environment.
+3. Create a new project: `npx @react-native-community/cli@latest init SentinelMobile`.
+4. Copy the contents of `mobile/App.tsx` into your new project's `App.tsx`.
+5. Install the specific native dependencies listed in `mobile/package.json`.
+6. **CRITICAL:** Update `SERVER_URL` in `App.tsx` with your **Public Server URL** (the ngrok link from step 1).
    * Incorrect: `http://localhost:3001` (Will not work on phone)
    * Correct: `https://abcd-123-456.ngrok-free.app`
-6. Build and install on your device: `npx react-native run-android` or `run-ios`.
+7. Build and install on your device: `npx react-native run-android`.
 
 ## 3. The Web Dashboard
-The current web folder.
+The interface you use to control the device.
 
-1. Update `App.tsx` (in the web folder) to remove the simulation logic and instead use `socket.io-client` to connect to your Backend Server.
-2. Implement the `WebRTC` receiving logic (simulated in the current `LiveFeed` component) using standard browser APIs (`new RTCPeerConnection()`).
+**See the dedicated guide: `README_WEB_DEPLOY.md`**
+
+In summary:
+1. Initialize a **Vite** React project locally.
+2. Move the `components`, `services`, and `App.tsx` files into the new project.
+3. Update the `SERVER_URL` in `App.tsx` to match your public backend URL.
+4. Deploy using **Vercel** for free hosting.
 
 ## Legal Notice
 Ensure you only install the Mobile Client on devices you legally own. Using this software to monitor individuals without their consent is a violation of privacy laws.

@@ -1,11 +1,25 @@
 import { GoogleGenAI } from "@google/genai";
 
-// Initialize the Gemini AI client
-// We assume process.env.API_KEY is available as per instructions
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+// Helper to retrieve API Key in different environments (Vite vs Standard/Preview)
+const getApiKey = (): string => {
+  try {
+    // @ts-ignore - Vite environment support
+    if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_KEY) {
+      // @ts-ignore
+      return import.meta.env.VITE_API_KEY;
+    }
+    // Standard Node/CRA/Preview environment
+    return process.env.API_KEY || '';
+  } catch (e) {
+    return '';
+  }
+};
+
+const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
 export const analyzeSurveillanceFrame = async (base64Image: string): Promise<string> => {
-  if (!process.env.API_KEY) {
+  const apiKey = getApiKey();
+  if (!apiKey) {
     return "DEMO MODE: Gemini API Key not found. Please connect an API key to enable AI analysis.";
   }
 
@@ -35,7 +49,7 @@ export const analyzeSurveillanceFrame = async (base64Image: string): Promise<str
 };
 
 export const generateSecurityReport = async (logs: string[]): Promise<string> => {
-   if (!process.env.API_KEY) {
+   if (!getApiKey()) {
     return "DEMO MODE: Cannot generate report without API Key.";
   }
 
