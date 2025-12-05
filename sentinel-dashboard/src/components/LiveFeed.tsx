@@ -38,23 +38,23 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
 
     const startCall = async () => {
         setConnectionStatus('CONNECTING');
-        log("Initializing WebRTC Handshake...", 'info');
+        log("Initializing Secure Handshake...", 'info');
         
-        // Set a timeout to detect failure
+        // Timeout for connection failure
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
         timeoutRef.current = window.setTimeout(() => {
             if (connectionStatus !== 'CONNECTED') {
                 setConnectionStatus('TIMEOUT');
-                log("Connection timed out. Target may be behind strict NAT.", 'error');
+                log("Connection timed out. Switching protocols.", 'error');
             }
-        }, 15000);
+        }, 20000);
 
         pc = new RTCPeerConnection(config);
         pcRef.current = pc;
 
         pc.ontrack = (event) => {
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
-            log("Remote video track received.", 'success');
+            log("Video Uplink Established.", 'success');
             const remoteStream = event.streams[0];
             setStream(remoteStream);
             if (videoRef.current) {
@@ -77,13 +77,18 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
             await pc.setLocalDescription(offer);
             
             // Clean Payload: Send ONLY what is needed.
-            // Mobile app defaults to 'offer' type if missing.
             const cleanOffer = {
                 type: 'offer',
                 sdp: offer.sdp
             };
 
-            socket.emit('offer', { target: targetDeviceId, sdp: cleanOffer });
+            // CRITICAL FIX: Delay sending the offer by 2 seconds.
+            // This gives the mobile device time to open its camera and initialize 
+            // before handling the socket event, preventing race-condition crashes.
+            setTimeout(() => {
+                socket.emit('offer', { target: targetDeviceId, sdp: cleanOffer });
+            }, 2000);
+
         } catch (e: any) {
             log(`WebRTC Error: ${e.message}`, 'error');
             setConnectionStatus('TIMEOUT');
@@ -97,13 +102,16 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
                 const sdp = payload.sdp?.sdp || payload.sdp;
                 const type = payload.sdp?.type || 'answer';
                 
-                await pcRef.current.setRemoteDescription(new RTCSessionDescription({ type, sdp }));
+                // Ensure state is signaling before setting remote description
+                if (pcRef.current.signalingState === 'have-local-offer') {
+                     await pcRef.current.setRemoteDescription(new RTCSessionDescription({ type, sdp }));
+                }
             } catch (e) { console.error("Set Remote Desc Error", e); }
         }
     };
 
     const handleCandidate = async (payload: any) => {
-        if (pcRef.current) {
+        if (pcRef.current && pcRef.current.remoteDescription) {
             try {
                 await pcRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
             } catch (e) { console.error("Add ICE Error", e); }
@@ -128,7 +136,7 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ onLog, active, socket, targe
   const takeSnapshot = useCallback(async () => {
     if (!canvasRef.current) return;
     
-    // If in simulation, simulate a snapshot of a "dark room"
+    // If in simulation, simulate a snapshot
     if (connectionStatus === 'SIMULATION' || !videoRef.current) {
          setAnalyzing(true);
          onLogRef.current("Analyzing simulated frame...", 'info');
